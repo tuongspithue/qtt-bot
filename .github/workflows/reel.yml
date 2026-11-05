@@ -1,0 +1,55 @@
+name: Dung Reel Quang Tri Teen
+
+on:
+  repository_dispatch:
+    types: [make_reel]          # bot Apps Script gọi sau khi vẽ xong khung hình
+  workflow_dispatch:            # chạy tay để thử (tab Actions → Run workflow)
+    inputs:
+      job:
+        description: "Mã job (cột job trong sheet REELS)"
+        required: true
+      folder_id:
+        description: "ID thư mục Drive chứa frame_*.png"
+        required: true
+      music_folder_id:
+        description: "ID thư mục nhạc nền (không bắt buộc)"
+        required: false
+      caption:
+        description: "Chú thích Reel"
+        required: false
+      dry_run:
+        description: "1 = chỉ dựng, không đăng"
+        required: false
+        default: "1"
+
+concurrency:
+  group: reel
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: reel/requirements.txt
+      - name: Cài thư viện
+        run: |
+          pip install -r reel/requirements.txt
+          command -v ffmpeg >/dev/null || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+      - name: Dựng và đăng Reel
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          FB_PAGE_ID: ${{ vars.FB_PAGE_ID }}
+          SHEET_ID: ${{ vars.SHEET_ID }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: python reel.py
+        working-directory: reel

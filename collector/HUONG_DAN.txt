@@ -1,0 +1,32 @@
+ỨNG DỤNG THU THẬP TIN TRƯỜNG HỌC (bản mới)
+==========================================
+
+1) Đặt các file này chung 1 thư mục:
+   main.py, requirements.txt, dstruong.xlsx, credentials_oauth.json (và credentials.json nếu có)
+
+2) Cài thư viện (1 lần):
+   pip install -r requirements.txt
+
+3) Chạy:
+   python main.py
+   - Lần đầu: trình duyệt mở ra để đăng nhập tài khoản Google của thầy (tài khoản sở hữu sheet và thư mục Drive),
+     bấm Cho phép. Sau đó file token.json được tạo, các lần sau không phải đăng nhập lại.
+   - Nếu Google báo "ứng dụng chưa được xác minh": bấm Nâng cao → Tiếp tục (đây là ứng dụng của chính thầy).
+     Nếu báo "access_denied": vào Google Cloud Console của dự án → OAuth consent screen → thêm email của thầy
+     vào Test users. Cần bật Google Drive API và Google Sheets API cho dự án.
+
+4) Cách hoạt động:
+   - Đọc từng bài: lấy nội dung, ngày đăng → tải ảnh về → đổi WebP/ảnh quá lớn sang JPEG
+     → tải ảnh lên Drive (thư mục con theo tháng, vd 2026-11) → ghi NGAY 1 dòng vào sheet RAW.
+   - Bị ngắt giữa chừng (mất mạng, tắt máy, Ctrl+C): bài đã ghi vẫn còn; chạy lại sẽ bỏ qua bài đã có trong RAW.
+   - KHÔNG xoá dữ liệu cũ trong RAW nữa (bản cũ xoá trắng sheet mỗi lần chạy).
+   - Cột linkimage chứa link ảnh trên Drive; bot đăng bài đọc thẳng ảnh từ Drive nên không còn lỗi tải ảnh
+     từ web trường (web *.quangtri.edu.vn chặn máy chủ Google).
+   - collector_state.json: nhớ bài cũ đã bỏ qua và ảnh đã tải lên (đỡ tải lại). Xoá file này nếu muốn quét lại từ đầu.
+   - collector.log: nhật ký mỗi lần chạy.
+
+5) Có thể sửa ở đầu main.py:
+   RECENT_DAYS (số ngày gần đây), MAX_POSTS_PER_SITE, MAX_IMAGES, DRIVE_FOLDER_ID, SPREADSHEET_ID.
+
+6) Chạy tự động hằng ngày trên Windows: Task Scheduler → Create Basic Task → chạy
+   "python" với tham số đường_dẫn\main.py, "Start in" là thư mục chứa main.py.

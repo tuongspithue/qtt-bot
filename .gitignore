@@ -1,0 +1,8 @@
+# KHÔNG BAO GIỜ đưa khoá lên kho công khai
+credentials*.json
+token.json
+*.pem
+collector/collector_state.json
+*.log
+__pycache__/
+*.mp4
