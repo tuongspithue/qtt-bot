@@ -89,14 +89,66 @@ def durations(n, total):
     return [round(span * x / s, 2) for x in w]
 
 
-def build_video(frames, music, total, out):
+# ─────────────────────────── nhạc nền ngẫu nhiên, không lặp ───────────────────────────
+MUSIC_RECENT = 4          # không dùng lại bài đã dùng ở 4 Reel gần nhất (nếu thư mục đủ bài)
+
+
+def audio_duration(path):
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                              "-of", "default=nw=1:nk=1", path], capture_output=True, text=True, timeout=30).stdout
+        return float(out.strip())
+    except Exception:
+        return 0.0
+
+
+def recent_music(sheets):
+    """Tên các bài nhạc đã dùng ở những Reel gần đây (ghi trong cột note của sheet REELS: "♪ tên bài @ 37s")."""
+    if not SHEET_ID:
+        return []
+    try:
+        rows = sheets.spreadsheets().values().get(spreadsheetId=SHEET_ID, range="REELS!A:Z").execute().get("values", [])
+        if not rows or "note" not in rows[0]:
+            return []
+        nc = rows[0].index("note")
+        used = []
+        for r in reversed(rows[1:]):
+            note = r[nc] if len(r) > nc else ""
+            if "♪" in note:
+                used.append(note.split("♪", 1)[1].split(" @ ")[0].strip())
+            if len(used) >= MUSIC_RECENT:
+                break
+        return used
+    except Exception as e:
+        log("⚠️ Không đọc được lịch sử nhạc:", str(e)[:120])
+        return []
+
+
+def pick_music(tracks, used):
+    """Chọn ngẫu nhiên 1 bài, tránh các bài vừa dùng; nếu thư mục ít bài thì chỉ tránh bài dùng gần nhất."""
+    fresh = [t for t in tracks if t["name"] not in used]
+    if not fresh and len(tracks) > 1 and used:
+        fresh = [t for t in tracks if t["name"] != used[0]]
+    return random.choice(fresh or tracks)
+
+
+def music_start(dur, total):
+    """Điểm bắt đầu ngẫu nhiên trong bài: bỏ đoạn dạo đầu (~8% hoặc tối đa 10s), không chạm đoạn kết."""
+    if dur <= total + 4:
+        return 0.0
+    lo = min(10.0, dur * 0.08)
+    hi = dur - total - 2.0
+    return round(random.uniform(lo, hi), 1) if hi > lo else 0.0
+
+
+def build_video(frames, music, total, out, music_ss=0.0):
     n = len(frames)
     durs = durations(n, total)
     args = ["ffmpeg", "-y", "-loglevel", "error"]
     for f in frames:
         args += ["-i", f]
     if music:
-        args += ["-stream_loop", "-1", "-i", music]
+        args += ["-stream_loop", "-1", "-ss", "%.1f" % music_ss, "-i", music]
     else:
         args += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
 
@@ -223,27 +275,33 @@ def main():
         frames = [download(drive, f["id"], os.path.join(tmp, f["name"])) for f in files]
         log("🖼 Tải %d khung hình" % len(frames))
 
-        music = None
+        music, music_ss, music_note = None, 0.0, ""
         if p.get("music_folder_id"):
             tracks = [f for f in list_files(drive, p["music_folder_id"]) if f["name"].lower().endswith((".mp3", ".m4a", ".wav"))]
             if tracks:
-                t = random.choice(tracks)
+                used = recent_music(sheets)
+                t = pick_music(tracks, used)
                 music = download(drive, t["id"], os.path.join(tmp, "music_" + t["name"]))
-                log("🎵 Nhạc nền:", t["name"])
+                dur = audio_duration(music)
+                music_ss = music_start(dur, p["seconds"])
+                music_note = "♪ %s @ %ds" % (t["name"], int(music_ss))
+                log("🎵 Nhạc nền: %s (dài %ds, phát từ giây %.1f; tránh %d bài vừa dùng / %d bài)"
+                    % (t["name"], dur, music_ss, len(used), len(tracks)))
         if not music:
             log("🔇 Không có nhạc nền (thêm file .mp3 vào thư mục nhạc trên Drive)")
 
         out = os.path.join(tmp, "reel_%s.mp4" % job)
-        build_video(frames, music, p["seconds"], out)
+        build_video(frames, music, p["seconds"], out, music_ss)
 
         if os.environ.get("DRY_RUN") == "1":
             log("DRY_RUN=1 → không đăng")
-            update_sheet(sheets, job, {"status": "rendered (dry run)", "finished_at": datetime.now(VN).isoformat(timespec="seconds")})
+            update_sheet(sheets, job, {"status": "rendered (dry run)", "note": music_note,
+                                       "finished_at": datetime.now(VN).isoformat(timespec="seconds")})
             return
         vid, st = publish_reel(out, p.get("caption") or "", p.get("link") or "")
         update_sheet(sheets, job, {"status": "published", "fb_video_id": vid,
                                    "finished_at": datetime.now(VN).isoformat(timespec="seconds"),
-                                   "note": (st.get("video_status") or "")})
+                                   "note": " · ".join(x for x in [st.get("video_status") or "", music_note] if x)})
         log("✅ Xong:", vid)
     except Exception as e:
         log("❌", e)
