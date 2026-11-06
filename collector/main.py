@@ -46,7 +46,10 @@ except Exception:
 # ═════════════════════════════ CẤU HÌNH ═════════════════════════════
 SPREADSHEET_ID = "1h2egAXIXIDgRrpNZCzvqakL_FMrDvV-3lYLGe9GhYNs"   # Sheet của Quang Tri Teen Bot
 SHEET_NAME = "RAW"
-DRIVE_FOLDER_ID = "1ruJGHT7qd7zWC4StL4028LoIZ0ww-Bg1"             # Thư mục Drive chứa ảnh
+# Thư mục gốc App_Fb_Giaoduc (theo ID nên di chuyển/đổi tên thoải mái); ảnh vào thư mục con theo tháng, vd 2026-11.
+# Đổi được không cần sửa mã: đặt biến môi trường DRIVE_FOLDER_ID (trên GitHub: Settings → Variables → Actions).
+DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID") or "1ruJGHT7qd7zWC4StL4028LoIZ0ww-Bg1"
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID") or SPREADSHEET_ID
 EXCEL_FILE = "dstruong.xlsx"
 
 OAUTH_FILE = "credentials_oauth.json"   # OAuth (tài khoản Google của thầy) — dùng để tải ảnh lên Drive và ghi Sheet

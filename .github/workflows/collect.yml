@@ -37,6 +37,8 @@ jobs:
       - name: Thu thập tin
         env:
           GOOGLE_OAUTH_TOKEN: ${{ secrets.GOOGLE_OAUTH_TOKEN }}
+          DRIVE_FOLDER_ID: ${{ vars.DRIVE_FOLDER_ID }}
+          SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }}
         run: python main.py
       - name: Lưu bộ nhớ cho lần sau
         if: always()
