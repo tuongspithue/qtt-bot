@@ -5,7 +5,7 @@ Kho này chạy 2 việc, miễn phí trên GitHub Actions (kho công khai):
 | Việc | Tệp | Khi nào chạy |
 |---|---|---|
 | Dựng Reel 20 giây và đăng lên Trang | `reel/reel.py`, `.github/workflows/reel.yml` | Bot Apps Script gửi lệnh (2–3 lần/ngày theo giờ trong Bảng điều khiển) |
-| Thu thập tin web trường → sheet RAW + ảnh lên Drive | `collector/main.py`, `.github/workflows/collect.yml` | 05:45 và 12:45 giờ Việt Nam (lịch của GitHub có thể trễ 5–20 phút) |
+| Thu thập tin web trường → sheet RAW + ảnh lên Drive | `collector/main.py` | **Chạy trên máy tính ở Việt Nam** (Task Scheduler + `collector/chay_thu_thap.bat`). Web trường chặn máy GitHub ở nước ngoài nên lịch trên GitHub đang tắt; vẫn bấm chạy tay được. |
 
 ## Khoá bí mật (Settings → Secrets and variables → Actions → New repository secret)
 
@@ -23,6 +23,12 @@ Khi đổi Page Access Token trong Bảng điều khiển của bot, nhớ cập
 Tab **Actions** → chọn workflow → **Run workflow**.
 - *Dung Reel*: nhập `job` và `folder_id` (lấy ở sheet REELS), để `dry_run = 1` để chỉ dựng không đăng.
 - *Thu thap tin*: bấm chạy và xem nhật ký.
+
+## Đặt lịch thu thập tin trên Windows
+1. Chép thư mục `collector` về máy (cùng `credentials_oauth.json`, `token.json`).
+2. Task Scheduler → **Create Basic Task** → tên "QTT thu thập tin" → **Daily**, giờ 05:45.
+3. Action **Start a program** → chọn file `chay_thu_thap.bat` trong thư mục `collector`.
+4. Mở lại task → **Triggers** → thêm lần 12:45. Tab **Conditions**: bỏ tick "Start only if on AC power"; tab **Settings**: tick "Run task as soon as possible after a scheduled start is missed".
 
 ## Lưu ý
 - Nhạc nền: thả file `.mp3` có giấy phép phù hợp (Pixabay Music, YouTube Audio Library…) vào thư mục Drive `QTT_NhacNen`.

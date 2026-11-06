@@ -1,9 +1,12 @@
 name: Thu thap tin truong hoc
 
+# Lịch tự chạy đang TẮT: máy GitHub (ở nước ngoài) không vào được web *.quangtri.edu.vn (thử ngày 06/11/2026:
+# 19/20 trường không kết nối được). Thu thập tin chạy trên máy tính ở Việt Nam bằng collector/chay_thu_thap.bat.
+# Nếu sau này web trường mở truy cập quốc tế, bỏ dấu # ở 3 dòng schedule dưới đây.
 on:
-  schedule:
-    - cron: "45 22 * * *"   # 05:45 giờ Việt Nam
-    - cron: "45 5 * * *"    # 12:45 giờ Việt Nam
+  # schedule:
+  #   - cron: "45 22 * * *"   # 05:45 giờ Việt Nam
+  #   - cron: "45 5 * * *"    # 12:45 giờ Việt Nam
   workflow_dispatch:
 
 concurrency:
