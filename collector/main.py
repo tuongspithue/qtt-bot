@@ -223,6 +223,9 @@ class State:
                 pass
         cut = (now_vn() - timedelta(days=30)).strftime("%Y-%m-%d")   # quên link cũ sau 30 ngày
         self.data["old_urls"] = {u: d for u, d in self.data["old_urls"].items() if d >= cut}
+        self.data.setdefault("saved_urls", {})
+        cut60 = (now_vn() - timedelta(days=60)).strftime("%Y-%m-%d")       # nhớ bài đã lưu 60 ngày
+        self.data["saved_urls"] = {u: d for u, d in self.data["saved_urls"].items() if d >= cut60}
 
     def save(self):
         tmp = STATE_FILE + ".tmp"
@@ -231,7 +234,11 @@ class State:
         os.replace(tmp, STATE_FILE)
 
     def is_old(self, url):
-        return url in self.data["old_urls"]
+        return url in self.data["old_urls"] or url in self.data["saved_urls"]
+
+    def mark_saved(self, url):
+        self.data["saved_urls"][url] = now_vn().strftime("%Y-%m-%d")
+        self.save()
 
     def mark_old(self, url):
         self.data["old_urls"][url] = now_vn().strftime("%Y-%m-%d")
@@ -324,7 +331,7 @@ class SchoolScraper:
         return links[:MAX_POSTS_PER_SITE]
 
     # ---------- chi tiết bài ----------
-    def article_detail(self, url):
+    def article_detail(self, url, title=""):
         r = self.get(url, timeout=25)
         if not r:
             return None
@@ -349,40 +356,112 @@ class SchoolScraper:
             if src and not src.startswith("data:"):
                 cands.append(urljoin(r.url, src))
         cands = [u for u in dict.fromkeys(cands) if not any(k in u.lower() for k in BAD_IMG_KEYS)]
-        return {"content": text[:5000], "images": cands, "date": self.extract_date(soup)}
+        d, how = self.extract_date(soup, title, r.url)
+        return {"content": text[:5000], "images": cands, "date": d, "date_how": how}
 
     # ---------- ngày đăng ----------
-    def extract_date(self, soup):
+    # Trang trường thường in "Thứ Bảy, 07/11/2026" (ngày hôm nay) ở đầu trang, và có khối "tin mới/tin liên quan"
+    # với ngày của bài khác. Vì vậy: ưu tiên dữ liệu máy đọc (meta, JSON-LD, URL), rồi nhãn "Ngày đăng…",
+    # rồi vùng sát tiêu đề bài; LUÔN bỏ đầu trang/menu/chân trang/cột bên trước khi dò ngày trong chữ.
+    NOISE_RE = re.compile(r"header|top-?bar|topnav|menu|nav|footer|sidebar|side-bar|aside|widget|banner|weather|thoitiet|"
+                          r"clock|calendar|lich|marquee|today|homnay|hom-nay|breadcrumb|related|lienquan|lien-quan|"
+                          r"tin-?khac|other|newest|tin-?moi|most|hot|slide|tab", re.I)
+    LABEL_RE = re.compile(r"(ngày\s*đăng|đăng\s*ngày|đăng\s*lúc|ngày\s*cập\s*nhật|cập\s*nhật|thời\s*gian\s*đăng|"
+                          r"ngày\s*xuất\s*bản|posted|published|date)\s*[:\-]?\s*(.{0,40})", re.I)
+
+    def extract_date(self, soup, title="", url=""):
+        d, how = self._date_with_source(soup, title, url)
+        if d and d > now_vn().replace(tzinfo=None) + timedelta(days=1):   # ngày tương lai = đọc nhầm
+            return None, "tương lai"
+        return d, how
+
+    def _date_with_source(self, soup, title, url):
+        # 1) Thẻ meta / JSON-LD — chuẩn nhất
         for attrs in ({"property": "article:published_time"}, {"name": "pubdate"}, {"name": "publish-date"},
-                      {"name": "date"}, {"itemprop": "datePublished"}):
+                      {"itemprop": "datePublished"}, {"name": "date"}, {"property": "og:updated_time"}):
             m = soup.find("meta", attrs=attrs)
             if m and m.get("content"):
                 d = self.parse_date(m["content"])
                 if d:
-                    return d
-        for t in soup.find_all("time"):
+                    return d, "meta"
+        for sc in soup.find_all("script", type="application/ld+json"):
+            m = re.search(r'"datePublished"\s*:\s*"([^"]+)"', sc.string or sc.get_text() or "")
+            if m and self.parse_date(m.group(1)):
+                return self.parse_date(m.group(1)), "json-ld"
+        # 2) Ngày nằm trong đường dẫn: /2026/11/05/ hoặc -20261105
+        m = re.search(r"/(20\d\d)/(\d{1,2})/(\d{1,2})/", url) or re.search(r"[-_/](20\d\d)(\d\d)(\d\d)(?:\d{4,})?(?:\D|$)", url)
+        if m:
+            try:
+                return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))), "url"
+            except ValueError:
+                pass
+        # Bỏ phần nhiễu trước khi dò chữ
+        body = BeautifulSoup(str(soup), "html.parser")
+        for el in body(["header", "nav", "footer", "aside", "script", "style", "noscript", "iframe", "form"]):
+            el.decompose()
+        for el in list(body.find_all(True)):
+            try:
+                if getattr(el, "decomposed", False) or el.attrs is None:
+                    continue
+                key = " ".join(el.get("class") or []) + " " + str(el.get("id") or "")
+                if key.strip() and self.NOISE_RE.search(key) and not el.find("h1"):
+                    el.decompose()
+            except Exception:
+                continue
+        # 3) Thẻ <time> trong vùng bài
+        for t in body.find_all("time"):
             d = self.parse_date(t.get("datetime", "") or t.get_text(" ", strip=True))
             if d:
-                return d
-        for el in soup.find_all(class_=re.compile(r"date|time|ngay|post-meta|published", re.I)):
+                return d, "time"
+        # 4) Nhãn "Ngày đăng: …", "Cập nhật lúc …"
+        txt = body.get_text(" ", strip=True)
+        for m in self.LABEL_RE.finditer(txt):
+            d = self.parse_date(m.group(2))
+            if d:
+                return d, "nhãn"
+        # 5) Sát tiêu đề bài: tìm thẻ tiêu đề rồi xem ~400 ký tự quanh nó
+        head = None
+        if title:
+            key = title[:30]
+            head = next((h for h in body.find_all(["h1", "h2", "h3"]) if key[:20] in h.get_text(" ", strip=True)), None)
+        head = head or body.find("h1")
+        if head is not None:
+            box = head.parent if head.parent is not None else head
+            for _ in range(2):                                  # leo tối đa 2 cấp nếu vùng quá nhỏ
+                if len(box.get_text(" ", strip=True)) > 200 or box.parent is None:
+                    break
+                box = box.parent
+            around = box.get_text(" ", strip=True)
+            k = around.find(head.get_text(" ", strip=True)[:20])
+            d = self.parse_date(around[max(0, k - 150): k + 400] if k >= 0 else around[:500])
+            if d:
+                return d, "gần tiêu đề"
+        # 6) Phần tử có class ngày tháng trong vùng bài
+        for el in body.find_all(class_=re.compile(r"date|time|ngay|post-meta|published|meta", re.I)):
             d = self.parse_date(el.get_text(" ", strip=True))
             if d:
-                return d
-        return self.parse_date(soup.get_text(" ", strip=True)[:6000])
+                return d, "class"
+        return None, "không thấy"
 
     @staticmethod
     def parse_date(text):
         text = str(text or "")
+        m = re.search(r"(\d{1,2})\s*tháng\s*(\d{1,2})\s*(?:năm|,)?\s*(\d{4})", text, re.I)   # 5 tháng 11 năm 2026
+        cands = []
+        if m:
+            cands.append((m.start(), "%d/%d/%d" % (int(m.group(1)), int(m.group(2)), int(m.group(3))), "%d/%m/%Y"))
         for pat, fmt in ((r"(\d{4}-\d{1,2}-\d{1,2})", "%Y-%m-%d"), (r"(\d{1,2}/\d{1,2}/\d{4})", "%d/%m/%Y"),
                          (r"(\d{1,2}-\d{1,2}-\d{4})", "%d-%m-%Y"), (r"(\d{1,2}\.\d{1,2}\.\d{4})", "%d.%m.%Y")):
             m = re.search(pat, text)
             if m:
-                try:
-                    d = datetime.strptime(m.group(1), fmt)
-                    if 2015 <= d.year <= now_vn().year + 1:
-                        return d
-                except ValueError:
-                    pass
+                cands.append((m.start(), m.group(1), fmt))
+        for _, val, fmt in sorted(cands):                       # lấy ngày xuất hiện SỚM NHẤT trong đoạn
+            try:
+                d = datetime.strptime(val, fmt)
+                if 2015 <= d.year <= now_vn().year + 1:
+                    return d
+            except ValueError:
+                pass
         return None
 
     # ---------- ảnh: tải về → kiểm tra → đổi JPEG → lên Drive ----------
@@ -464,7 +543,7 @@ class SchoolScraper:
                     self.stats["old"] += 1
                     continue                                     # lần trước đã biết là bài cũ
                 try:
-                    det = self.article_detail(url)
+                    det = self.article_detail(url, title)
                     if not det or len(det["content"]) < 40:
                         self.stats["skip"] += 1
                         log.info("   ⏩ Không đọc được nội dung: %s", title[:60])
@@ -473,9 +552,10 @@ class SchoolScraper:
                     if (d and d < cutoff) or (not d and not KEEP_UNDATED):
                         self.stats["old"] += 1
                         self.state.mark_old(url)
-                        log.info("   ⏩ Bài cũ/không rõ ngày: %s", title[:60])
+                        log.info("   ⏩ Bài cũ/không rõ ngày (%s, %s): %s",
+                                 d.strftime("%d/%m/%Y") if d else "?", det.get("date_how"), title[:60])
                         continue
-                    log.info("   + %s", title[:70])
+                    log.info("   + %s  [ngày %s — theo %s]", title[:70], d.strftime("%d/%m/%Y") if d else "?", det.get("date_how"))
                     images = self.upload_images(det["images"], post_id, url)
                     rec = {
                         "post_id": post_id, "source": school, "title": title, "content": det["content"],
@@ -486,6 +566,7 @@ class SchoolScraper:
                     }
                     self.g.append(rec)                           # ghi ngay — ngắt chương trình cũng không mất bài này
                     existing.update([url, post_id, rec["hash"]])
+                    self.state.mark_saved(url)
                     self.stats["saved"] += 1
                     log.info("      ✅ Đã lưu vào RAW (%d ảnh)", len(images))
                 except KeyboardInterrupt:
