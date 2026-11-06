@@ -1,17 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-Dựng Reel 20 giây cho Quang Tri Teen và đăng lên Trang Facebook.
+Dựng Reel 20 giây và đăng lên Trang Facebook (dùng chung cho nhiều trang: Quang Tri Teen, Quảng Trị Vươn Mình…).
 Chạy trên GitHub Actions, do bot Apps Script gọi (repository_dispatch "make_reel").
 
 Đầu vào (client_payload): job, folder_id (thư mục Drive chứa frame_1.png..frame_N.png),
 music_folder_id (thư mục nhạc nền .mp3), caption, link (link bài gốc để bình luận), seconds.
-Bí mật (Secrets): GOOGLE_CREDENTIALS_JSON (tài khoản dịch vụ), FB_PAGE_TOKEN.
+Tuỳ chọn để chọn trang: page_id, sheet_id, token_secret (tên secret chứa Page token, dạng FB_PAGE_TOKEN hoặc FB_PAGE_TOKEN_XXX).
+Không gửi các trường này → dùng mặc định của Quang Tri Teen (biến FB_PAGE_ID, SHEET_ID, secret FB_PAGE_TOKEN).
+Bí mật (Secrets): GOOGLE_CREDENTIALS_JSON (tài khoản dịch vụ), FB_PAGE_TOKEN, FB_PAGE_TOKEN_KTXH (Quảng Trị Vươn Mình).
 Biến: FB_PAGE_ID, SHEET_ID.
 """
 import io
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -42,7 +45,8 @@ def load_payload():
         with open(ev, encoding="utf-8") as f:
             data = json.load(f)
         p = data.get("client_payload") or data.get("inputs") or {}
-    for k in ("job", "folder_id", "music_folder_id", "caption", "link", "seconds"):   # chạy tay / thử cục bộ
+    for k in ("job", "folder_id", "music_folder_id", "caption", "link", "seconds",
+              "page_id", "sheet_id", "token_secret"):                                # chạy tay / thử cục bộ
         v = os.environ.get("REEL_" + k.upper())
         if v and not p.get(k):
             p[k] = v
@@ -50,6 +54,23 @@ def load_payload():
         sys.exit("Thiếu job / folder_id")
     p["seconds"] = max(10, min(60, float(p.get("seconds") or 20)))
     return p
+
+
+def apply_target(p):
+    """Chọn trang đích theo lệnh gửi sang: page_id, sheet_id, token_secret (không có → mặc định Quang Tri Teen)."""
+    global PAGE_ID, SHEET_ID
+    if str(p.get("page_id") or "").strip():
+        PAGE_ID = str(p["page_id"]).strip()
+    if str(p.get("sheet_id") or "").strip():
+        SHEET_ID = str(p["sheet_id"]).strip()
+    name = str(p.get("token_secret") or "FB_PAGE_TOKEN").strip()
+    if not re.fullmatch(r"FB_PAGE_TOKEN(_[A-Z0-9]+)?", name):       # chỉ nhận tên secret token Trang
+        sys.exit("token_secret không hợp lệ: " + name)
+    token = os.environ.get(name, "")
+    if not token and os.environ.get("DRY_RUN") != "1":
+        sys.exit("Thiếu secret %s trên GitHub (Settings → Secrets → Actions)" % name)
+    os.environ["FB_PAGE_TOKEN"] = token
+    log("🎯 Trang %s · sheet %s… · token %s" % (PAGE_ID, SHEET_ID[:10], name))
 
 
 def google_services():
@@ -262,6 +283,7 @@ def col_letter(i):
 
 def main():
     p = load_payload()
+    apply_target(p)
     job = p["job"]
     log("▶ Reel", job)
     drive, sheets = google_services()

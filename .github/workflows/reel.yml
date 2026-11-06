@@ -1,4 +1,4 @@
-name: Dung Reel Quang Tri Teen
+name: Dung Reel (Quang Tri Teen + Quang Tri Vuon Minh)
 
 on:
   repository_dispatch:
@@ -16,6 +16,15 @@ on:
         required: false
       caption:
         description: "Chú thích Reel"
+        required: false
+      page_id:
+        description: "ID Trang (để trống = Quang Tri Teen; Quảng Trị Vươn Mình = 1468012176388818)"
+        required: false
+      sheet_id:
+        description: "ID Google Sheet của bot (để trống = sheet QTT)"
+        required: false
+      token_secret:
+        description: "Tên secret chứa Page token (FB_PAGE_TOKEN hoặc FB_PAGE_TOKEN_KTXH)"
         required: false
       dry_run:
         description: "1 = chỉ dựng, không đăng"
@@ -48,6 +57,7 @@ jobs:
         env:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          FB_PAGE_TOKEN_KTXH: ${{ secrets.FB_PAGE_TOKEN_KTXH }}
           FB_PAGE_ID: ${{ vars.FB_PAGE_ID }}
           SHEET_ID: ${{ vars.SHEET_ID }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
