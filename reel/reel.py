@@ -5,6 +5,7 @@ Chạy trên GitHub Actions, do bot Apps Script gọi (repository_dispatch "make
 
 Đầu vào (client_payload): job, folder_id (thư mục Drive chứa frame_1.png..frame_N.png),
 music_folder_id (thư mục nhạc nền .mp3), caption, link (link bài gốc để bình luận), seconds.
+Tuỳ chọn kind: "reel" (mặc định, đăng Reel) hoặc "story" (đăng Tin dạng video có nhạc).
 Tuỳ chọn để chọn trang: page_id, sheet_id, token_secret (tên secret chứa Page token, dạng FB_PAGE_TOKEN hoặc FB_PAGE_TOKEN_XXX).
 Không gửi các trường này → dùng mặc định của Quang Tri Teen (biến FB_PAGE_ID, SHEET_ID, secret FB_PAGE_TOKEN).
 Bí mật (Secrets): GOOGLE_CREDENTIALS_JSON (tài khoản dịch vụ), FB_PAGE_TOKEN, FB_PAGE_TOKEN_KTXH (Quảng Trị Vươn Mình).
@@ -46,13 +47,14 @@ def load_payload():
             data = json.load(f)
         p = data.get("client_payload") or data.get("inputs") or {}
     for k in ("job", "folder_id", "music_folder_id", "caption", "link", "seconds",
-              "page_id", "sheet_id", "token_secret"):                                # chạy tay / thử cục bộ
+              "page_id", "sheet_id", "token_secret", "kind"):                                # chạy tay / thử cục bộ
         v = os.environ.get("REEL_" + k.upper())
         if v and not p.get(k):
             p[k] = v
     if not p.get("job") or not p.get("folder_id"):
         sys.exit("Thiếu job / folder_id")
-    p["seconds"] = max(10, min(60, float(p.get("seconds") or 20)))
+    p["seconds"] = max(5, min(60, float(p.get("seconds") or 20)))
+    p["kind"] = "story" if str(p.get("kind") or "").strip().lower() == "story" else "reel"
     return p
 
 
@@ -178,6 +180,8 @@ def build_video(frames, music, total, out, music_ss=0.0):
         nf = int(round(d * FPS))
         # Ảnh chuyển động nhẹ (Ken Burns): xen kẽ phóng to / thu nhỏ từ tâm
         z = "min(1+0.0009*on,1.10)" if i % 2 == 0 else "max(1.10-0.0009*on,1.0)"
+        if n == 1:                                       # 1 ảnh (bản tin): phóng rất nhẹ để không cắt mất chữ sát mép
+            z = "min(1+0.0001*on,1.03)"
         parts.append(
             "[%d:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1,"
             "zoompan=z='%s':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=%d:s=%dx%d:fps=%d,"
@@ -241,6 +245,21 @@ def publish_reel(path, caption, link):
         except Exception as e:                            # bình luận lỗi không làm hỏng việc đăng
             log("⚠️ Không bình luận được link:", str(e)[:150])
     return vid, status
+
+
+def publish_story(path):
+    """Đăng video lên Tin (Story) của Trang: start → tải lên (rupload) → finish."""
+    page, token = PAGE_ID, os.environ["FB_PAGE_TOKEN"]
+    start = fb("POST", "%s/%s/video_stories" % (GRAPH, page), data={"upload_phase": "start", "access_token": token})
+    vid = start["video_id"]
+    url = start.get("upload_url") or "https://rupload.facebook.com/video-upload/v23.0/%s" % vid
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        fb("POST", url, headers={"Authorization": "OAuth " + token, "offset": "0", "file_size": str(size)}, data=f.read())
+    fin = fb("POST", "%s/%s/video_stories" % (GRAPH, page), params={
+        "access_token": token, "video_id": vid, "upload_phase": "finish"})
+    log("📤 Đã đăng Tin video, video_id", vid, "post_id", fin.get("post_id", ""))
+    return vid, {"video_status": "story", "post_id": fin.get("post_id", "")}
 
 
 # ─────────────────────────── ghi kết quả vào sheet REELS ───────────────────────────
@@ -320,7 +339,10 @@ def main():
             update_sheet(sheets, job, {"status": "rendered (dry run)", "note": music_note,
                                        "finished_at": datetime.now(VN).isoformat(timespec="seconds")})
             return
-        vid, st = publish_reel(out, p.get("caption") or "", p.get("link") or "")
+        if p["kind"] == "story":
+            vid, st = publish_story(out)
+        else:
+            vid, st = publish_reel(out, p.get("caption") or "", p.get("link") or "")
         update_sheet(sheets, job, {"status": "published", "fb_video_id": vid,
                                    "finished_at": datetime.now(VN).isoformat(timespec="seconds"),
                                    "note": " · ".join(x for x in [st.get("video_status") or "", music_note] if x)})

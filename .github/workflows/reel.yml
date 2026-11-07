@@ -26,6 +26,9 @@ on:
       token_secret:
         description: "Tên secret chứa Page token (FB_PAGE_TOKEN hoặc FB_PAGE_TOKEN_KTXH)"
         required: false
+      kind:
+        description: "reel (mặc định) hoặc story (đăng Tin video có nhạc)"
+        required: false
       dry_run:
         description: "1 = chỉ dựng, không đăng"
         required: false
