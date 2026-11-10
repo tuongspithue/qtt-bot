@@ -55,6 +55,13 @@ def load_payload():
         sys.exit("Thiếu job / folder_id")
     p["seconds"] = max(5, min(60, float(p.get("seconds") or 20)))
     p["kind"] = "story" if str(p.get("kind") or "").strip().lower() == "story" else "reel"
+    nar = p.get("narration")                              # lời đọc, mỗi khung một câu (không bắt buộc)
+    if isinstance(nar, str):
+        try:
+            nar = json.loads(nar)
+        except ValueError:
+            nar = [nar]
+    p["narration"] = [str(x).strip() for x in nar] if isinstance(nar, list) else []
     return p
 
 
@@ -164,9 +171,52 @@ def music_start(dur, total):
     return round(random.uniform(lo, hi), 1) if hi > lo else 0.0
 
 
-def build_video(frames, music, total, out, music_ss=0.0):
+# ─────────────────────────── giọng đọc (không bắt buộc) ───────────────────────────
+VOICE = os.environ.get("REEL_VOICE") or "vi-VN-HoaiMyNeural"
+
+
+def synth_narration(lines, tmp):
+    """Đọc từng câu bằng giọng AI (edge-tts). Trả về danh sách (đường dẫn, giây) hoặc None cho khung không đọc được.
+    Lỗi ở đâu thì khung đó im lặng; video vẫn dựng bình thường với nhạc nền."""
+    out = [None] * len(lines)
+    try:
+        import asyncio
+        import edge_tts
+    except Exception as e:
+        log("⚠️ Không có thư viện giọng đọc:", str(e)[:120])
+        return out
+
+    async def one(text, path):
+        await edge_tts.Communicate(text, VOICE, rate="+4%").save(path)
+
+    for i, t in enumerate(lines):
+        if not t:
+            continue
+        path = os.path.join(tmp, "voice_%d.mp3" % (i + 1))
+        try:
+            asyncio.run(asyncio.wait_for(one(t, path), 45))
+            d = audio_duration(path)
+            if d > 0.3:
+                out[i] = (path, d)
+        except Exception as e:
+            log("⚠️ Không đọc được khung %d: %s" % (i + 1, str(e)[:120]))
+    return out
+
+
+def voice_durations(n, voices, total):
+    """Mỗi khung dài ít nhất bằng lời đọc + 0,5s; khung không có lời đọc giữ độ dài mặc định. Trả (durs, tổng mới)."""
+    base = durations(n, total)
+    durs = []
+    for i in range(n):
+        v = voices[i] if i < len(voices) else None
+        durs.append(round(max(base[i], v[1] + 0.5), 2) if v else base[i])
+    return durs, round(min(60.0, sum(durs) - (n - 1) * FADE), 2)
+
+
+def build_video(frames, music, total, out, music_ss=0.0, voices=None, durs=None):
     n = len(frames)
-    durs = durations(n, total)
+    durs = durs or durations(n, total)
+    vlist = [(i, v) for i, v in enumerate((voices or [])[:n]) if v]
     args = ["ffmpeg", "-y", "-loglevel", "error"]
     for f in frames:
         args += ["-i", f]
@@ -174,6 +224,8 @@ def build_video(frames, music, total, out, music_ss=0.0):
         args += ["-stream_loop", "-1", "-ss", "%.1f" % music_ss, "-i", music]
     else:
         args += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+    for _, v in vlist:
+        args += ["-i", v[0]]
 
     parts = []
     for i, d in enumerate(durs):
@@ -194,7 +246,20 @@ def build_video(frames, music, total, out, music_ss=0.0):
         parts.append("[%s][v%d]xfade=transition=%s:duration=%.2f:offset=%.2f[x%d]" % (last, i, trans, FADE, off, i))
         last = "x%d" % i
     a = n
-    parts.append("[%d:a]atrim=0:%.2f,afade=t=in:d=0.6,afade=t=out:st=%.2f:d=1.5,volume=0.85[a]" % (a, total, max(0, total - 1.5)))
+    if vlist:                                            # có giọng đọc: nhạc nền nhỏ lại, lời đọc vào đúng đầu từng khung
+        parts.append("[%d:a]atrim=0:%.2f,afade=t=in:d=0.6,afade=t=out:st=%.2f:d=1.5,volume=0.22[bg]" % (a, total, max(0, total - 1.5)))
+        starts, acc = [0.0], 0.0
+        for d in durs[:-1]:
+            acc += d - FADE
+            starts.append(acc)
+        labels = "[bg]"
+        for k, (i, _) in enumerate(vlist):
+            ms = int(round((starts[i] + 0.1) * 1000))
+            parts.append("[%d:a]adelay=%d|%d,volume=1.7[vo%d]" % (a + 1 + k, ms, ms, k))
+            labels += "[vo%d]" % k
+        parts.append("%samix=inputs=%d:duration=first:dropout_transition=0:normalize=0,atrim=0:%.2f[a]" % (labels, 1 + len(vlist), total))
+    else:
+        parts.append("[%d:a]atrim=0:%.2f,afade=t=in:d=0.6,afade=t=out:st=%.2f:d=1.5,volume=0.85[a]" % (a, total, max(0, total - 1.5)))
     args += ["-filter_complex", ";".join(parts), "-map", "[%s]" % last, "-map", "[a]",
              "-t", "%.2f" % total, "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
@@ -316,6 +381,14 @@ def main():
         frames = [download(drive, f["id"], os.path.join(tmp, f["name"])) for f in files]
         log("🖼 Tải %d khung hình" % len(frames))
 
+        voices, durs, total = [], None, p["seconds"]
+        if p["kind"] == "reel" and any(p.get("narration") or []):
+            voices = synth_narration(p["narration"][:len(frames)], tmp)
+            if any(voices):
+                durs, total = voice_durations(len(frames), voices, p["seconds"])
+                log("🎙 Giọng đọc %d/%d khung · video %.1fs" % (sum(1 for v in voices if v), len(frames), total))
+            else:
+                voices = []
         music, music_ss, music_note = None, 0.0, ""
         if p.get("music_folder_id"):
             tracks = [f for f in list_files(drive, p["music_folder_id"]) if f["name"].lower().endswith((".mp3", ".m4a", ".wav"))]
@@ -324,15 +397,17 @@ def main():
                 t = pick_music(tracks, used)
                 music = download(drive, t["id"], os.path.join(tmp, "music_" + t["name"]))
                 dur = audio_duration(music)
-                music_ss = music_start(dur, p["seconds"])
+                music_ss = music_start(dur, total)
                 music_note = "♪ %s @ %ds" % (t["name"], int(music_ss))
                 log("🎵 Nhạc nền: %s (dài %ds, phát từ giây %.1f; tránh %d bài vừa dùng / %d bài)"
                     % (t["name"], dur, music_ss, len(used), len(tracks)))
+        if voices:
+            music_note = (music_note + " · 🎙 giọng đọc").strip(" ·")
         if not music:
             log("🔇 Không có nhạc nền (thêm file .mp3 vào thư mục nhạc trên Drive)")
 
         out = os.path.join(tmp, "reel_%s.mp4" % job)
-        build_video(frames, music, p["seconds"], out, music_ss)
+        build_video(frames, music, total, out, music_ss, voices, durs)
 
         if os.environ.get("DRY_RUN") == "1":
             log("DRY_RUN=1 → không đăng")
