@@ -62,6 +62,11 @@ def load_payload():
         except ValueError:
             nar = [nar]
     p["narration"] = [str(x).strip() for x in nar] if isinstance(nar, list) else []
+    global VOICE                                          # phần tử đầu "@voice:<tên giọng>" chọn giọng (nam/nữ), không phải lời đọc
+    if p["narration"] and p["narration"][0].startswith("@voice:"):
+        v = p["narration"].pop(0)[7:].strip()
+        if v in VOICES:
+            VOICE = v
     return p
 
 
@@ -172,7 +177,8 @@ def music_start(dur, total):
 
 
 # ─────────────────────────── giọng đọc (không bắt buộc) ───────────────────────────
-VOICE = os.environ.get("REEL_VOICE") or "vi-VN-HoaiMyNeural"
+VOICES = ("vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural")   # nữ, nam (edge-tts chỉ có 2 giọng tiếng Việt)
+VOICE = os.environ.get("REEL_VOICE") or VOICES[0]
 
 
 def synth_narration(lines, tmp):
@@ -204,13 +210,19 @@ def synth_narration(lines, tmp):
 
 
 def voice_durations(n, voices, total):
-    """Mỗi khung dài ít nhất bằng lời đọc + 0,5s; khung không có lời đọc giữ độ dài mặc định. Trả (durs, tổng mới)."""
+    """Độ dài khung theo lời đọc (lời đọc + 0,6s, tối thiểu 2,5s) nên video dài/ngắn theo nội dung, không ép đúng `total`;
+    khung không có lời đọc giữ độ dài mặc định. Tổng nằm trong 12–60s. Trả (durs, tổng mới)."""
     base = durations(n, total)
     durs = []
     for i in range(n):
         v = voices[i] if i < len(voices) else None
-        durs.append(round(max(base[i], v[1] + 0.5), 2) if v else base[i])
-    return durs, round(min(60.0, sum(durs) - (n - 1) * FADE), 2)
+        durs.append(round(max(2.5, v[1] + 0.6), 2) if v else base[i])
+    tot = sum(durs) - (n - 1) * FADE
+    if tot < 12.0:                                        # quá ngắn → kéo giãn đều các khung lên tối thiểu 12s
+        k = (12.0 + (n - 1) * FADE) / max(1e-6, sum(durs))
+        durs = [round(d * k, 2) for d in durs]
+        tot = sum(durs) - (n - 1) * FADE
+    return durs, round(min(60.0, tot), 2)
 
 
 def build_video(frames, music, total, out, music_ss=0.0, voices=None, durs=None):
