@@ -62,11 +62,15 @@ def load_payload():
         except ValueError:
             nar = [nar]
     p["narration"] = [str(x).strip() for x in nar] if isinstance(nar, list) else []
-    global VOICE                                          # phần tử đầu "@voice:<tên giọng>" chọn giọng (nam/nữ), không phải lời đọc
-    if p["narration"] and p["narration"][0].startswith("@voice:"):
-        v = p["narration"].pop(0)[7:].strip()
-        if v in VOICES:
-            VOICE = v
+    global VOICE, VOICE_RATE                              # phần tử đầu "@voice:<giọng>", "@rate:+20%" chọn giọng/tốc độ, không phải lời đọc
+    while p["narration"] and p["narration"][0].startswith("@"):
+        m = p["narration"].pop(0)
+        if m.startswith("@voice:") and m[7:].strip() in VOICES:
+            VOICE = m[7:].strip()
+        elif m.startswith("@rate:"):
+            r = m[6:].strip()
+            if re.fullmatch(r"[+-]\d{1,2}%", r):
+                VOICE_RATE = r
     return p
 
 
@@ -179,6 +183,7 @@ def music_start(dur, total):
 # ─────────────────────────── giọng đọc (không bắt buộc) ───────────────────────────
 VOICES = ("vi-VN-HoaiMyNeural", "vi-VN-NamMinhNeural")   # nữ, nam (edge-tts chỉ có 2 giọng tiếng Việt)
 VOICE = os.environ.get("REEL_VOICE") or VOICES[0]
+VOICE_RATE = "+4%"                                        # Tin/bản tin gửi "@rate:+20%" để đọc nhanh hơn
 
 
 def synth_narration(lines, tmp):
@@ -193,7 +198,7 @@ def synth_narration(lines, tmp):
         return out
 
     async def one(text, path):
-        await edge_tts.Communicate(text, VOICE, rate="+4%").save(path)
+        await edge_tts.Communicate(text, VOICE, rate=VOICE_RATE).save(path)
 
     for i, t in enumerate(lines):
         if not t:
@@ -209,17 +214,17 @@ def synth_narration(lines, tmp):
     return out
 
 
-def voice_durations(n, voices, total):
+def voice_durations(n, voices, total, min_total=12.0):
     """Độ dài khung theo lời đọc (lời đọc + 0,6s, tối thiểu 2,5s) nên video dài/ngắn theo nội dung, không ép đúng `total`;
-    khung không có lời đọc giữ độ dài mặc định. Tổng nằm trong 12–60s. Trả (durs, tổng mới)."""
+    khung không có lời đọc giữ độ dài mặc định. Tổng nằm trong min_total–60s (Reel 12s, Tin 6s). Trả (durs, tổng mới)."""
     base = durations(n, total)
     durs = []
     for i in range(n):
         v = voices[i] if i < len(voices) else None
         durs.append(round(max(2.5, v[1] + 0.6), 2) if v else base[i])
     tot = sum(durs) - (n - 1) * FADE
-    if tot < 12.0:                                        # quá ngắn → kéo giãn đều các khung lên tối thiểu 12s
-        k = (12.0 + (n - 1) * FADE) / max(1e-6, sum(durs))
+    if tot < min_total:                                   # quá ngắn → kéo giãn đều các khung lên tối thiểu
+        k = (min_total + (n - 1) * FADE) / max(1e-6, sum(durs))
         durs = [round(d * k, 2) for d in durs]
         tot = sum(durs) - (n - 1) * FADE
     return durs, round(min(60.0, tot), 2)
@@ -394,10 +399,10 @@ def main():
         log("🖼 Tải %d khung hình" % len(frames))
 
         voices, durs, total = [], None, p["seconds"]
-        if p["kind"] == "reel" and any(p.get("narration") or []):
+        if any(p.get("narration") or []):
             voices = synth_narration(p["narration"][:len(frames)], tmp)
             if any(voices):
-                durs, total = voice_durations(len(frames), voices, p["seconds"])
+                durs, total = voice_durations(len(frames), voices, p["seconds"], 6.0 if p["kind"] == "story" else 12.0)
                 log("🎙 Giọng đọc %d/%d khung · video %.1fs" % (sum(1 for v in voices if v), len(frames), total))
             else:
                 voices = []
