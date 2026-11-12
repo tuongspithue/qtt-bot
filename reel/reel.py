@@ -204,13 +204,19 @@ def synth_narration(lines, tmp):
         if not t:
             continue
         path = os.path.join(tmp, "voice_%d.mp3" % (i + 1))
-        try:
-            asyncio.run(asyncio.wait_for(one(t, path), 45))
-            d = audio_duration(path)
-            if d > 0.3:
-                out[i] = (path, d)
-        except Exception as e:
-            log("⚠️ Không đọc được khung %d: %s" % (i + 1, str(e)[:120]))
+        for attempt in (1, 2, 3):                         # edge-tts thỉnh thoảng trả "No audio was received" → thử lại
+            try:
+                asyncio.run(asyncio.wait_for(one(t, path), 45))
+                d = audio_duration(path)
+                if d > 0.3:
+                    out[i] = (path, d)
+                    break
+                raise RuntimeError("file âm thanh rỗng")
+            except Exception as e:
+                if attempt == 3:
+                    log("⚠️ Không đọc được khung %d: %s" % (i + 1, str(e)[:120]))
+                else:
+                    time.sleep(1.5 * attempt)
     return out
 
 
